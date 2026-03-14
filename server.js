@@ -752,6 +752,68 @@ class WeatherAgent {
         };
       }
 
+      const parseLocationQuery = (query) => {
+        const parts = query
+          .split(',')
+          .map(part => part.trim())
+          .filter(Boolean);
+
+        const countryAliases = {
+          india: 'IN',
+          in: 'IN',
+          usa: 'US',
+          us: 'US',
+          uk: 'GB',
+          england: 'GB',
+          uae: 'AE',
+          australia: 'AU',
+          canada: 'CA',
+          germany: 'DE',
+          france: 'FR',
+          japan: 'JP'
+        };
+
+        const primaryCity = parts[0] || query.trim();
+        const secondPart = parts[1] ? parts[1].toLowerCase() : '';
+        const thirdPart = parts[2] ? parts[2].toLowerCase() : '';
+
+        let countryCodeHint = null;
+        let countryNameHint = null;
+        let adminHint = null;
+
+        if (secondPart) {
+          if (countryAliases[secondPart]) {
+            countryCodeHint = countryAliases[secondPart];
+            countryNameHint = secondPart;
+          } else if (secondPart.length === 2) {
+            countryCodeHint = secondPart.toUpperCase();
+            countryNameHint = secondPart;
+          } else {
+            adminHint = secondPart;
+            countryNameHint = secondPart;
+          }
+        }
+
+        if (thirdPart) {
+          if (countryAliases[thirdPart]) {
+            countryCodeHint = countryAliases[thirdPart];
+            countryNameHint = thirdPart;
+          } else if (thirdPart.length === 2) {
+            countryCodeHint = thirdPart.toUpperCase();
+            countryNameHint = thirdPart;
+          }
+        }
+
+        return {
+          primaryCity,
+          countryCodeHint,
+          countryNameHint,
+          adminHint
+        };
+      };
+
+      const locationQuery = parseLocationQuery(city.trim());
+
       const cityKey = this.normalizeCityKey(city);
       const cachedCoordinates = this.getCacheEntry(this.coordinatesCache, cityKey, this.coordinatesCacheTtlMs);
       if (cachedCoordinates) {
@@ -764,38 +826,61 @@ class WeatherAgent {
       // Enhanced geocoding with better search parameters for Google-like accuracy
       const response = await axios.get(this.geoApiUrl, {
         params: {
-          name: city.trim(),
+          name: locationQuery.primaryCity,
           count: 10, // Get more results for better matching
           language: 'en',
-          format: 'json'
+          format: 'json',
+          ...(locationQuery.countryCodeHint ? { countryCode: locationQuery.countryCodeHint } : {})
         }
       });
       
       if (response.data.results && response.data.results.length > 0) {
-        let bestResult = response.data.results[0];
-        
-        // Enhanced matching algorithm for Google Weather compatibility
-        const cityLower = city.toLowerCase().trim();
-        
-        // Priority 1: Exact name match
-        for (const result of response.data.results) {
-          if (result.name.toLowerCase() === cityLower) {
-            bestResult = result;
-            break;
+        const targetCity = this.normalizeCityKey(locationQuery.primaryCity);
+        const preferredFeatureCodes = ['PPLC', 'PPLA', 'PPLA2', 'PPLA3', 'PPL'];
+
+        const scoreResult = (result) => {
+          const resultName = this.normalizeCityKey(result.name || '');
+          const resultCountryCode = (result.country_code || '').toUpperCase();
+          const resultCountryName = this.normalizeCityKey(result.country || '');
+          const resultAdmin = this.normalizeCityKey(result.admin1 || '');
+          const featureCode = result.feature_code || '';
+          const population = Number.isFinite(result.population) ? result.population : 0;
+
+          let score = 0;
+
+          if (resultName === targetCity) score += 120;
+          else if (resultName.startsWith(targetCity)) score += 70;
+          else if (resultName.includes(targetCity)) score += 40;
+
+          if (preferredFeatureCodes.includes(featureCode)) {
+            score += 25;
+            score += Math.max(0, (preferredFeatureCodes.length - preferredFeatureCodes.indexOf(featureCode)) * 2);
           }
-        }
-        
-        // Priority 2: If no exact match, prefer major cities with higher population
-        if (bestResult.name.toLowerCase() !== cityLower) {
-          for (const result of response.data.results) {
-            // Prefer places with higher administrative level (cities over villages)
-            if (result.feature_code && ['PPL', 'PPLA', 'PPLA2', 'PPLA3', 'PPLC'].includes(result.feature_code)) {
-              if (result.population && (!bestResult.population || result.population > bestResult.population)) {
-                bestResult = result;
-              }
-            }
+
+          if (locationQuery.countryCodeHint && resultCountryCode === locationQuery.countryCodeHint) {
+            score += 80;
           }
-        }
+
+          if (locationQuery.countryNameHint && resultCountryName.includes(this.normalizeCityKey(locationQuery.countryNameHint))) {
+            score += 30;
+          }
+
+          if (locationQuery.adminHint && resultAdmin.includes(this.normalizeCityKey(locationQuery.adminHint))) {
+            score += 35;
+          }
+
+          if (population > 0) {
+            score += Math.min(40, Math.log10(population + 1) * 5);
+          }
+
+          return score;
+        };
+
+        const scoredResults = response.data.results
+          .map(result => ({ result, score: scoreResult(result) }))
+          .sort((a, b) => b.score - a.score);
+
+        const bestResult = scoredResults[0].result;
         
         // Validate coordinates are reasonable
         const lat = parseFloat(bestResult.latitude);
