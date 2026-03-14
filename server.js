@@ -1658,3 +1658,5 @@ app.listen(PORT, () => {
   console.log(`Weather Agent server running on port ${PORT}`);
   console.log(`Visit http://localhost:${PORT} to use the weather agent`);
 });
+
+module.exports = app;
