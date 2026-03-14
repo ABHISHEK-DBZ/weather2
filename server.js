@@ -805,53 +805,84 @@ class WeatherAgent {
       }
 
       const { latitude, longitude, name, country } = coordsResult.data;
-      
-      // Enhanced API call with comprehensive weather parameters + timezone handling
-      const response = await axios.get(this.weatherApiUrl, {
-        params: {
-          latitude: latitude,
-          longitude: longitude,
-          models: 'best_match', // Use best available weather model
-          current: [
-            'temperature_2m',
-            'relative_humidity_2m', 
-            'apparent_temperature',
-            'weather_code',
-            'surface_pressure',
-            'wind_speed_10m',
-            'wind_direction_10m',
-            'cloud_cover',
-            'visibility',
-            'uv_index',
-            'is_day',
-            'precipitation'
-          ].join(','),
-          hourly: [
-            'temperature_2m',
-            'relative_humidity_2m',
-            'precipitation_probability',
-            'weather_code',
-            'apparent_temperature',
-            'soil_moisture_27_to_81cm',
-            'soil_temperature_54cm',
-            'wind_speed_180m',
-            'wind_direction_180m',
-            'temperature_180m',
-            'uv_index'
-          ].join(','),
-          daily: [
-            'temperature_2m_max',
-            'temperature_2m_min',
-            'weather_code'
-          ].join(','),
-          timezone: 'auto', // This ensures local timezone
+
+      const getRequestParams = (useAdvancedModel = true) => {
+        const currentFields = [
+          'temperature_2m',
+          'relative_humidity_2m',
+          'apparent_temperature',
+          'weather_code',
+          'surface_pressure',
+          'wind_speed_10m',
+          'wind_direction_10m',
+          'cloud_cover',
+          'visibility',
+          'uv_index',
+          'is_day',
+          'precipitation'
+        ];
+
+        const hourlyFields = useAdvancedModel
+          ? [
+              'temperature_2m',
+              'relative_humidity_2m',
+              'precipitation_probability',
+              'weather_code',
+              'apparent_temperature',
+              'soil_moisture_27_to_81cm',
+              'soil_temperature_54cm',
+              'wind_speed_180m',
+              'wind_direction_180m',
+              'temperature_180m',
+              'uv_index'
+            ]
+          : [
+              'temperature_2m',
+              'relative_humidity_2m',
+              'precipitation_probability',
+              'weather_code',
+              'apparent_temperature',
+              'uv_index'
+            ];
+
+        const params = {
+          latitude,
+          longitude,
+          current: currentFields.join(','),
+          hourly: hourlyFields.join(','),
+          daily: ['temperature_2m_max', 'temperature_2m_min', 'weather_code'].join(','),
+          timezone: 'auto',
           forecast_days: 3,
           temperature_unit: 'celsius',
           wind_speed_unit: 'ms',
           precipitation_unit: 'mm',
           timeformat: 'iso8601'
+        };
+
+        if (useAdvancedModel) {
+          params.models = 'best_match';
         }
-      });
+
+        return params;
+      };
+
+      // Try advanced model first, then gracefully fallback for providers/runtimes
+      // where some advanced combinations can fail.
+      let response;
+      try {
+        response = await axios.get(this.weatherApiUrl, {
+          params: getRequestParams(true),
+          timeout: 12000,
+          headers: { 'User-Agent': 'weather-agent/1.0' }
+        });
+      } catch (advancedError) {
+        console.warn('Advanced weather request failed, retrying with fallback params:', advancedError.message);
+        response = await axios.get(this.weatherApiUrl, {
+          params: getRequestParams(false),
+          timeout: 12000,
+          headers: { 'User-Agent': 'weather-agent/1.0' }
+        });
+      }
       
       const current = response.data.current;
       const hourly = response.data.hourly;
@@ -861,7 +892,7 @@ class WeatherAgent {
       const weatherInfo = this.getWeatherDescription(weatherCode, isDay);
       
       // Get current time in location's timezone (from API response)
-      const currentTimeString = response.data.current_time || new Date().toISOString();
+      const currentTimeString = response.data.current?.time || new Date().toISOString();
       const currentTime = new Date(currentTimeString);
       const currentHour = currentTime.getHours();
       
@@ -895,6 +926,12 @@ class WeatherAgent {
       
       // Advanced weather analysis with new parameters
       const advancedData = this.processAdvancedWeatherData(hourly, currentHour);
+
+      // Keep wind/temperature dependent advanced insights consistent with current readings.
+      if (advancedData && Object.keys(advancedData).length > 0) {
+        advancedData.windShear = this.calculateWindShear(advancedData.highAltitudeWindSpeed, current.wind_speed_10m);
+        advancedData.temperatureGradient = this.calculateTemperatureGradient(advancedData.highAltitudeTemperature, currentTemp);
+      }
       
       // Enhanced recommendation with all available data
       const recommendation = this.generateEnhancedRecommendation({
@@ -946,10 +983,11 @@ class WeatherAgent {
         }
       };
     } catch (error) {
-      console.error('Weather API Error:', error.message);
+      const providerMessage = error.response?.data?.reason || error.response?.data?.error || error.message;
+      console.error('Weather API Error:', providerMessage);
       return {
         success: false,
-        error: 'Unable to fetch accurate weather data. Please try again.'
+        error: `Unable to fetch weather data right now. ${providerMessage ? `Provider message: ${providerMessage}` : 'Please try again.'}`
       };
     }
   }
