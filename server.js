@@ -26,6 +26,35 @@ class WeatherAgent {
     this.geoApiUrl = 'https://geocoding-api.open-meteo.com/v1/search';
     this.weatherApiUrl = 'https://api.open-meteo.com/v1/forecast';
     this.airQualityUrl = 'https://air-quality-api.open-meteo.com/v1/air-quality';
+    this.coordinatesCache = new Map();
+    this.weatherCache = new Map();
+    this.coordinatesCacheTtlMs = 1000 * 60 * 60 * 24 * 30;
+    this.weatherCacheTtlMs = 1000 * 60 * 15;
+  }
+
+  normalizeCityKey(city) {
+    return city.trim().toLowerCase();
+  }
+
+  getCacheEntry(cacheStore, key, ttlMs) {
+    const entry = cacheStore.get(key);
+    if (!entry) return null;
+
+    const age = Date.now() - entry.timestamp;
+    if (age > ttlMs) return null;
+    return entry.value;
+  }
+
+  getStaleCacheEntry(cacheStore, key) {
+    const entry = cacheStore.get(key);
+    return entry ? entry.value : null;
+  }
+
+  setCacheEntry(cacheStore, key, value) {
+    cacheStore.set(key, {
+      timestamp: Date.now(),
+      value
+    });
   }
 
   // AI Weather Assistant - Enhanced & Comprehensive
@@ -722,6 +751,15 @@ class WeatherAgent {
           error: 'Please provide a valid city name.'
         };
       }
+
+      const cityKey = this.normalizeCityKey(city);
+      const cachedCoordinates = this.getCacheEntry(this.coordinatesCache, cityKey, this.coordinatesCacheTtlMs);
+      if (cachedCoordinates) {
+        return {
+          success: true,
+          data: cachedCoordinates
+        };
+      }
       
       // Enhanced geocoding with better search parameters for Google-like accuracy
       const response = await axios.get(this.geoApiUrl, {
@@ -767,18 +805,22 @@ class WeatherAgent {
           throw new Error('Invalid coordinates received');
         }
         
+        const coordinateData = {
+          latitude: lat.toFixed(4), // Google-like precision
+          longitude: lon.toFixed(4),
+          name: bestResult.name,
+          country: bestResult.country,
+          admin1: bestResult.admin1,
+          population: bestResult.population || null,
+          featureCode: bestResult.feature_code || null,
+          elevation: bestResult.elevation || null
+        };
+
+        this.setCacheEntry(this.coordinatesCache, cityKey, coordinateData);
+
         return {
           success: true,
-          data: {
-            latitude: lat.toFixed(4), // Google-like precision
-            longitude: lon.toFixed(4),
-            name: bestResult.name,
-            country: bestResult.country,
-            admin1: bestResult.admin1,
-            population: bestResult.population || null,
-            featureCode: bestResult.feature_code || null,
-            elevation: bestResult.elevation || null
-          }
+          data: coordinateData
         };
       } else {
         return {
@@ -796,6 +838,21 @@ class WeatherAgent {
   }
 
   async getCurrentWeather(city) {
+    const cityKey = city && typeof city === 'string' ? this.normalizeCityKey(city) : '';
+
+    if (cityKey) {
+      const freshWeather = this.getCacheEntry(this.weatherCache, cityKey, this.weatherCacheTtlMs);
+      if (freshWeather) {
+        return {
+          success: true,
+          data: {
+            ...freshWeather,
+            cacheStatus: 'fresh-cache'
+          }
+        };
+      }
+    }
+
     try {
       const axios = require('axios');
       const coordsResult = await this.getCoordinates(city);
@@ -947,44 +1004,77 @@ class WeatherAgent {
         uvIndex: current.uv_index
       });
       
+      const weatherPayload = {
+        city: name,
+        country: country,
+        temperature: Math.round(currentTemp * 10) / 10, // Google-like precision
+        feelsLike: currentApparentTemp ? Math.round(currentApparentTemp * 10) / 10 : Math.round(currentTemp * 10) / 10,
+        apparentTemperature: currentApparentTemp ? Math.round(currentApparentTemp * 10) / 10 : null,
+        description: weatherInfo.description,
+        humidity: Math.round(currentHumidity),
+        windSpeed: Math.round(current.wind_speed_10m * 10) / 10,
+        windDirection: current.wind_direction_10m ? Math.round(current.wind_direction_10m) : null,
+        pressure: current.surface_pressure ? Math.round(current.surface_pressure * 10) / 10 : null,
+        visibility: current.visibility ? Math.round(current.visibility / 1000 * 10) / 10 : null,
+        cloudCover: current.cloud_cover ? Math.round(current.cloud_cover) : null,
+        uvIndex: current.uv_index ? Math.round(current.uv_index * 10) / 10 : null,
+        isDay: isDay,
+        icon: weatherInfo.icon,
+        recommendation: recommendation,
+        accuracy: '🎯 Google Weather Compatible Data',
+        timezone: response.data.timezone || 'UTC',
+        coordinates: `${latitude}, ${longitude}`,
+        dataSource: 'Open-Meteo API (High Resolution + Advanced Parameters)',
+        googleCompatible: true,
+        advancedData: advancedData,
+        lastUpdated: currentTimeString,
+        cacheStatus: 'live',
+        debug: {
+          weatherCode: weatherCode,
+          isDay: isDay,
+          rawTemp: current.temperature_2m,
+          processedTemp: currentTemp,
+          timezoneOffset: response.data.utc_offset_seconds || 0
+        }
+      };
+
+      if (cityKey) {
+        this.setCacheEntry(this.weatherCache, cityKey, weatherPayload);
+      }
+
       return {
         success: true,
-        data: {
-          city: name,
-          country: country,
-          temperature: Math.round(currentTemp * 10) / 10, // Google-like precision
-          feelsLike: currentApparentTemp ? Math.round(currentApparentTemp * 10) / 10 : Math.round(currentTemp * 10) / 10,
-          apparentTemperature: currentApparentTemp ? Math.round(currentApparentTemp * 10) / 10 : null,
-          description: weatherInfo.description,
-          humidity: Math.round(currentHumidity),
-          windSpeed: Math.round(current.wind_speed_10m * 10) / 10,
-          windDirection: current.wind_direction_10m ? Math.round(current.wind_direction_10m) : null,
-          pressure: current.surface_pressure ? Math.round(current.surface_pressure * 10) / 10 : null,
-          visibility: current.visibility ? Math.round(current.visibility / 1000 * 10) / 10 : null,
-          cloudCover: current.cloud_cover ? Math.round(current.cloud_cover) : null,
-          uvIndex: current.uv_index ? Math.round(current.uv_index * 10) / 10 : null,
-          isDay: isDay,
-          icon: weatherInfo.icon,
-          recommendation: recommendation,
-          accuracy: '🎯 Google Weather Compatible Data',
-          timezone: response.data.timezone || 'UTC',
-          coordinates: `${latitude}, ${longitude}`,
-          dataSource: 'Open-Meteo API (High Resolution + Advanced Parameters)',
-          googleCompatible: true,
-          advancedData: advancedData,
-          lastUpdated: currentTimeString,
-          debug: {
-            weatherCode: weatherCode,
-            isDay: isDay,
-            rawTemp: current.temperature_2m,
-            processedTemp: currentTemp,
-            timezoneOffset: response.data.utc_offset_seconds || 0
-          }
-        }
+        data: weatherPayload
       };
     } catch (error) {
       const providerMessage = error.response?.data?.reason || error.response?.data?.error || error.message;
       console.error('Weather API Error:', providerMessage);
+
+      const isRateLimited = typeof providerMessage === 'string' &&
+        (providerMessage.toLowerCase().includes('limit exceeded') ||
+         providerMessage.toLowerCase().includes('too many requests') ||
+         error.response?.status === 429);
+
+      if (isRateLimited && cityKey) {
+        const staleWeather = this.getStaleCacheEntry(this.weatherCache, cityKey);
+        if (staleWeather) {
+          return {
+            success: true,
+            data: {
+              ...staleWeather,
+              cacheStatus: 'stale-cache',
+              providerNotice: 'Live provider is rate-limited. Showing most recent cached weather.'
+            }
+          };
+        }
+
+        const fallbackWeather = await this.getFallbackWeatherFromWttr(city);
+        if (fallbackWeather?.success) {
+          this.setCacheEntry(this.weatherCache, cityKey, fallbackWeather.data);
+          return fallbackWeather;
+        }
+      }
+
       return {
         success: false,
         error: `Unable to fetch weather data right now. ${providerMessage ? `Provider message: ${providerMessage}` : 'Please try again.'}`
@@ -1195,6 +1285,85 @@ class WeatherAgent {
     }
 
     return recommendation;
+  }
+
+  getIconFromDescription(descriptionText, isDay = true) {
+    const text = (descriptionText || '').toLowerCase();
+    if (text.includes('thunder')) return '11d';
+    if (text.includes('snow') || text.includes('sleet') || text.includes('ice')) return '13d';
+    if (text.includes('rain') || text.includes('drizzle') || text.includes('shower')) return '10d';
+    if (text.includes('fog') || text.includes('mist') || text.includes('haze')) return '50d';
+    if (text.includes('cloud') || text.includes('overcast')) return isDay ? '03d' : '03n';
+    return isDay ? '01d' : '01n';
+  }
+
+  async getFallbackWeatherFromWttr(city) {
+    try {
+      const axios = require('axios');
+      const response = await axios.get(`https://wttr.in/${encodeURIComponent(city)}?format=j1`, {
+        timeout: 12000,
+        headers: { 'User-Agent': 'weather-agent/1.0' }
+      });
+
+      const current = response.data?.current_condition?.[0];
+      const area = response.data?.nearest_area?.[0];
+
+      if (!current) {
+        return null;
+      }
+
+      const description = current.weatherDesc?.[0]?.value || 'Unknown';
+      const resolvedCity = area?.areaName?.[0]?.value || city;
+      const resolvedCountry = area?.country?.[0]?.value || 'Unknown';
+      const latitude = area?.latitude || null;
+      const longitude = area?.longitude || null;
+      const currentTemp = parseFloat(current.temp_C);
+      const feelsLike = parseFloat(current.FeelsLikeC);
+      const humidity = parseFloat(current.humidity);
+      const windSpeedKmph = parseFloat(current.windspeedKmph);
+
+      const weatherPayload = {
+        city: resolvedCity,
+        country: resolvedCountry,
+        temperature: Number.isFinite(currentTemp) ? currentTemp : null,
+        feelsLike: Number.isFinite(feelsLike) ? feelsLike : null,
+        apparentTemperature: Number.isFinite(feelsLike) ? feelsLike : null,
+        description,
+        humidity: Number.isFinite(humidity) ? humidity : null,
+        windSpeed: Number.isFinite(windSpeedKmph) ? Math.round((windSpeedKmph / 3.6) * 10) / 10 : null,
+        windDirection: current.winddirDegree ? parseFloat(current.winddirDegree) : null,
+        pressure: current.pressure ? parseFloat(current.pressure) : null,
+        visibility: current.visibility ? parseFloat(current.visibility) : null,
+        cloudCover: current.cloudcover ? parseFloat(current.cloudcover) : null,
+        uvIndex: current.uvIndex ? parseFloat(current.uvIndex) : null,
+        isDay: current.isdaytime === 'yes',
+        icon: this.getIconFromDescription(description, current.isdaytime === 'yes'),
+        recommendation: this.getWeatherRecommendation(
+          Number.isFinite(currentTemp) ? currentTemp : 25,
+          description.toLowerCase()
+        ),
+        accuracy: 'Fallback provider weather data',
+        timezone: area?.timezone?.[0]?.value || 'UTC',
+        coordinates: latitude && longitude ? `${latitude}, ${longitude}` : 'Unavailable',
+        dataSource: 'wttr.in fallback provider',
+        googleCompatible: false,
+        advancedData: {},
+        lastUpdated: new Date().toISOString(),
+        cacheStatus: 'provider-fallback',
+        providerNotice: 'Primary provider rate-limited. Showing weather from fallback provider.',
+        debug: {
+          source: 'wttr.in'
+        }
+      };
+
+      return {
+        success: true,
+        data: weatherPayload
+      };
+    } catch (fallbackError) {
+      console.error('Fallback provider error:', fallbackError.message);
+      return null;
+    }
   }
 }
 
