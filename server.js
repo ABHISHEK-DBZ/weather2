@@ -1494,6 +1494,10 @@ class WeatherAgent {
       }
 
       const description = current.weatherDesc?.[0]?.value || 'Unknown';
+      const rawRequestedCity = String(city || '').split(',')[0].trim();
+      const requestedCityDisplay = rawRequestedCity
+        ? rawRequestedCity.toLowerCase().replace(/\b\w/g, char => char.toUpperCase())
+        : null;
       const resolvedCity = area?.areaName?.[0]?.value || city;
       const resolvedCountry = area?.country?.[0]?.value || 'Unknown';
       const latitude = area?.latitude || null;
@@ -1504,7 +1508,7 @@ class WeatherAgent {
       const windSpeedKmph = parseFloat(current.windspeedKmph);
 
       const weatherPayload = {
-        city: resolvedCity,
+        city: requestedCityDisplay || resolvedCity,
         country: resolvedCountry,
         temperature: Number.isFinite(currentTemp) ? currentTemp : null,
         feelsLike: Number.isFinite(feelsLike) ? feelsLike : null,
@@ -1533,7 +1537,8 @@ class WeatherAgent {
         cacheStatus: 'provider-fallback',
         providerNotice: 'Primary provider rate-limited. Showing weather from fallback provider.',
         debug: {
-          source: 'wttr.in'
+          source: 'wttr.in',
+          providerResolvedLocation: resolvedCity
         }
       };
 

@@ -118,6 +118,10 @@ class WeatherApp {
         // Add apparent temperature if available
         const feelsLike = data.apparentTemperature ? 
             `<div class="feels-like">Feels like ${data.apparentTemperature}°C</div>` : '';
+
+        const providerNotice = data.providerNotice
+            ? `<div class="provider-notice"><i class="fas fa-info-circle"></i> ${data.providerNotice}</div>`
+            : '';
         
         weatherDisplay.innerHTML = `
             <div class="weather-card">
@@ -179,6 +183,7 @@ class WeatherApp {
                 <strong>Smart Recommendation:</strong><br>
                 ${data.recommendation}
             </div>
+            ${providerNotice}
         `;
         
         weatherDisplay.style.display = 'block';
