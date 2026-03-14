@@ -237,6 +237,7 @@ class WeatherApp {
 
     async askWeatherAI() {
         const query = document.getElementById('aiQuery').value.trim();
+        const mode = document.getElementById('aiMode')?.value || 'advanced';
         
         if (!query) {
             this.showAIError('Please ask me a weather question!');
@@ -256,7 +257,8 @@ class WeatherApp {
                 },
                 body: JSON.stringify({
                     query: query,
-                    city: cityFromQuery
+                    city: cityFromQuery,
+                    mode: mode
                 })
             });
 
@@ -265,7 +267,7 @@ class WeatherApp {
             if (data.success) {
                 // Handle different response structures
                 const aiResponse = data.response || data.data?.aiResponse || data.data;
-                this.displayAIResponse(aiResponse);
+                this.displayAIResponse(aiResponse, data.mode || mode);
             } else {
                 this.showAIError(data.error);
             }
@@ -324,15 +326,76 @@ class WeatherApp {
         aiResponse.style.display = 'block';
     }
 
-    displayAIResponse(response) {
+    escapeHtml(text) {
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    renderMarkdown(markdownText) {
+        let safe = this.escapeHtml(markdownText || '');
+
+        safe = safe.replace(/\r\n/g, '\n');
+        safe = safe.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>');
+        safe = safe.replace(/^##\s+(.+)$/gm, '<h2>$1</h2>');
+        safe = safe.replace(/^#\s+(.+)$/gm, '<h1>$1</h1>');
+        safe = safe.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        safe = safe.replace(/\*(?!\*)([^*]+)\*/g, '<em>$1</em>');
+        safe = safe.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+        const lines = safe.split('\n');
+        let html = '';
+        let inList = false;
+
+        for (const line of lines) {
+            if (/^\s*[-*]\s+/.test(line)) {
+                if (!inList) {
+                    html += '<ul>';
+                    inList = true;
+                }
+                html += `<li>${line.replace(/^\s*[-*]\s+/, '')}</li>`;
+                continue;
+            }
+
+            if (inList) {
+                html += '</ul>';
+                inList = false;
+            }
+
+            if (line.trim() === '') {
+                html += '<br>';
+                continue;
+            }
+
+            if (/^<h[1-3]>/.test(line)) {
+                html += line;
+            } else {
+                html += `<p>${line}</p>`;
+            }
+        }
+
+        if (inList) {
+            html += '</ul>';
+        }
+
+        return html;
+    }
+
+    displayAIResponse(response, mode = 'advanced') {
         const aiResponse = document.getElementById('aiResponse');
+        const modeLabel = mode === 'normal' ? 'Normal' : 'Advanced';
+        const responseHtml = this.renderMarkdown(response);
         aiResponse.innerHTML = `
             <div class="chat-response">
                 <div style="display: flex; align-items: center; margin-bottom: 1rem;">
                     <i class="fas fa-robot" style="font-size: 1.5rem; margin-right: 0.5rem;"></i>
                     <strong>AI Weather Assistant</strong>
+                    <span class="chat-mode-badge">${modeLabel} Chat</span>
                 </div>
-                ${response}
+                <div class="chat-markdown">${responseHtml}</div>
             </div>
         `;
         aiResponse.style.display = 'block';

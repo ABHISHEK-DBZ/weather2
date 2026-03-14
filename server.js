@@ -58,7 +58,7 @@ class WeatherAgent {
   }
 
   // AI Weather Assistant - Enhanced & Comprehensive
-  async processWeatherQuery(query, city) {
+  async processWeatherQuery(query, city, mode = 'advanced') {
     const weatherKeywords = {
       temperature: ['temperature', 'temp', 'hot', 'cold', 'warm', 'cool', 'degree', 'celsius', 'fahrenheit', 'garam', 'thanda', 'thandak', 'गर्म', 'ठंडा', 'तापमान'],
       rain: ['rain', 'raining', 'wet', 'precipitation', 'shower', 'drizzle', 'barish', 'pani', 'baarish', 'storm', 'बारिश', 'पानी', 'बरसात'],
@@ -108,8 +108,57 @@ class WeatherAgent {
       return weatherData;
     }
 
-    // Generate Enhanced AI response based on query type
+    const chatMode = mode === 'normal' ? 'normal' : 'advanced';
+
+    // Generate AI response based on selected chat mode.
+    if (chatMode === 'normal') {
+      return this.generateNormalWeatherResponse(query, weatherData.data, weatherKeywords, isHindi);
+    }
+
     return this.generateAdvancedIntelligentResponse(query, weatherData.data, weatherKeywords, isHindi);
+  }
+
+  generateNormalWeatherResponse(query, weatherData, keywords, isHindi) {
+    const queryLower = query.toLowerCase();
+
+    const greeting = weatherData.isDay
+      ? (isHindi ? 'नमस्ते! ☀️' : 'Hello! ☀️')
+      : (isHindi ? 'नमस्कार! 🌙' : 'Hi there! 🌙');
+
+    let response = isHindi
+      ? `### ${greeting}\n\n**${weatherData.city}, ${weatherData.country}** का quick weather update:`
+      : `### ${greeting}\n\nQuick weather update for **${weatherData.city}, ${weatherData.country}**:`;
+
+    response += isHindi
+      ? `\n- तापमान: **${weatherData.temperature}°C** (महसूस: ${weatherData.feelsLike}°C)\n- स्थिति: **${weatherData.description}**\n- नमी: ${weatherData.humidity}%\n- हवा: ${weatherData.windSpeed ?? 'N/A'} m/s\n`
+      : `\n- Temperature: **${weatherData.temperature}°C** (Feels like: ${weatherData.feelsLike}°C)\n- Condition: **${weatherData.description}**\n- Humidity: ${weatherData.humidity}%\n- Wind: ${weatherData.windSpeed ?? 'N/A'} m/s\n`;
+
+    const askedCategory = Object.keys(keywords).find(category =>
+      keywords[category].some(keyword => queryLower.includes(keyword))
+    );
+
+    if (askedCategory === 'clothing') {
+      response += isHindi
+        ? `\n**सलाह:** ${this.getEnhancedClothingAdvice(weatherData, true).trim()}`
+        : `\n**Tip:** ${this.getEnhancedClothingAdvice(weatherData, false).trim()}`;
+    } else if (askedCategory === 'activities') {
+      response += isHindi
+        ? `\n**सुझाव:** ${this.getEnhancedActivitySuggestions(weatherData, true).trim()}`
+        : `\n**Suggestion:** ${this.getEnhancedActivitySuggestions(weatherData, false).trim()}`;
+    } else {
+      response += isHindi
+        ? `\n**सामान्य सलाह:** ${weatherData.recommendation}`
+        : `\n**General advice:** ${weatherData.recommendation}`;
+    }
+
+    return {
+      success: true,
+      response,
+      confidence: 88,
+      language: isHindi ? 'hindi' : 'english',
+      mode: 'normal',
+      categories: askedCategory ? [askedCategory] : ['general']
+    };
   }
 
   generateAdvancedIntelligentResponse(query, weatherData, keywords, isHindi) {
@@ -236,6 +285,7 @@ class WeatherAgent {
       response: response,
       confidence: 95,
       language: isHindi ? 'hindi' : 'english',
+      mode: 'advanced',
       categories: Object.keys(keywords).filter(category => 
         keywords[category].some(k => queryLower.includes(k))
       ),
@@ -1552,7 +1602,7 @@ app.get('/api/weather/compare/:city', async (req, res) => {
 
 // AI Weather Assistant Endpoint - Enhanced
 app.post('/api/weather-assistant', async (req, res) => {
-  const { query, city } = req.body;
+  const { query, city, mode } = req.body;
   
   if (!query) {
     return res.json({
@@ -1561,13 +1611,13 @@ app.post('/api/weather-assistant', async (req, res) => {
     });
   }
 
-  const response = await weatherAgent.processWeatherQuery(query, city);
+  const response = await weatherAgent.processWeatherQuery(query, city, mode);
   res.json(response);
 });
 
 // Backward compatibility
 app.post('/api/chat', async (req, res) => {
-  const { query, city } = req.body;
+  const { query, city, mode } = req.body;
   
   if (!query) {
     return res.json({
@@ -1576,7 +1626,7 @@ app.post('/api/chat', async (req, res) => {
     });
   }
 
-  const response = await weatherAgent.processWeatherQuery(query, city);
+  const response = await weatherAgent.processWeatherQuery(query, city, mode);
   res.json(response);
 });
 
