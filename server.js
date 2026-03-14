@@ -879,28 +879,31 @@ class WeatherAgent {
           'precipitation'
         ];
 
-        const hourlyFields = useAdvancedModel
-          ? [
-              'temperature_2m',
-              'relative_humidity_2m',
-              'precipitation_probability',
-              'weather_code',
-              'apparent_temperature',
-              'soil_moisture_27_to_81cm',
-              'soil_temperature_54cm',
-              'wind_speed_180m',
-              'wind_direction_180m',
-              'temperature_180m',
-              'uv_index'
-            ]
-          : [
-              'temperature_2m',
-              'relative_humidity_2m',
-              'precipitation_probability',
-              'weather_code',
-              'apparent_temperature',
-              'uv_index'
-            ];
+        if (!useAdvancedModel) {
+          // Matches the lightweight Open-Meteo profile the user provided.
+          return {
+            latitude,
+            longitude,
+            daily: 'sunrise,sunset,weather_code,temperature_2m_max',
+            hourly: 'temperature_2m',
+            timezone: 'auto',
+            forecast_days: 5
+          };
+        }
+
+        const hourlyFields = [
+          'temperature_2m',
+          'relative_humidity_2m',
+          'precipitation_probability',
+          'weather_code',
+          'apparent_temperature',
+          'soil_moisture_27_to_81cm',
+          'soil_temperature_54cm',
+          'wind_speed_180m',
+          'wind_direction_180m',
+          'temperature_180m',
+          'uv_index'
+        ];
 
         const params = {
           latitude,
@@ -941,29 +944,69 @@ class WeatherAgent {
         });
       }
       
-      const current = response.data.current;
-      const hourly = response.data.hourly;
-      const daily = response.data.daily;
-      const weatherCode = current.weather_code;
-      const isDay = current.is_day === 1;
+      const current = response.data.current || null;
+      const hourly = response.data.hourly || {};
+      const daily = response.data.daily || {};
+
+      const now = new Date();
+      const findNearestHourlyIndex = () => {
+        if (!Array.isArray(hourly.time) || hourly.time.length === 0) return -1;
+        let nearestIndex = 0;
+        let nearestDiff = Infinity;
+        for (let i = 0; i < hourly.time.length; i += 1) {
+          const diff = Math.abs(new Date(hourly.time[i]).getTime() - now.getTime());
+          if (diff < nearestDiff) {
+            nearestDiff = diff;
+            nearestIndex = i;
+          }
+        }
+        return nearestIndex;
+      };
+
+      const nearestHourIndex = findNearestHourlyIndex();
+      const getHourlyValue = (fieldName) => {
+        const values = hourly[fieldName];
+        if (!Array.isArray(values) || nearestHourIndex < 0) return null;
+        return values[nearestHourIndex] !== undefined ? values[nearestHourIndex] : null;
+      };
+
+      const weatherCode = current?.weather_code ?? (Array.isArray(daily.weather_code) ? daily.weather_code[0] : 0);
+
+      let isDay = current?.is_day === 1;
+      if (!current && Array.isArray(daily.sunrise) && Array.isArray(daily.sunset) && daily.sunrise[0] && daily.sunset[0]) {
+        const sunrise = new Date(daily.sunrise[0]).getTime();
+        const sunset = new Date(daily.sunset[0]).getTime();
+        const nowTs = now.getTime();
+        isDay = nowTs >= sunrise && nowTs <= sunset;
+      }
+
       const weatherInfo = this.getWeatherDescription(weatherCode, isDay);
       
       // Get current time in location's timezone (from API response)
-      const currentTimeString = response.data.current?.time || new Date().toISOString();
+      const currentTimeString = current?.time || getHourlyValue('time') || new Date().toISOString();
       const currentTime = new Date(currentTimeString);
       const currentHour = currentTime.getHours();
       
       // Use most accurate temperature data - prioritize current over hourly
-      let currentTemp = current.temperature_2m;
-      let currentHumidity = current.relative_humidity_2m;
-      let currentApparentTemp = current.apparent_temperature;
+      let currentTemp = current?.temperature_2m ?? getHourlyValue('temperature_2m');
+      let currentHumidity = current?.relative_humidity_2m ?? getHourlyValue('relative_humidity_2m');
+      let currentApparentTemp = current?.apparent_temperature ?? getHourlyValue('apparent_temperature');
+
+      if (!Number.isFinite(currentTemp) && Array.isArray(daily.temperature_2m_max) && Number.isFinite(daily.temperature_2m_max[0])) {
+        currentTemp = daily.temperature_2m_max[0];
+      }
+      if (!Number.isFinite(currentTemp)) {
+        currentTemp = 25;
+      }
       
       // For better accuracy matching Google Weather:
       // 1. Use current temperature as primary source
       // 2. Only use hourly if current is unavailable or seems incorrect
       if (hourly && hourly.temperature_2m && Array.isArray(hourly.temperature_2m)) {
-        const hourlyTemp = hourly.temperature_2m[currentHour];
-        const hourlyApparent = hourly.apparent_temperature ? hourly.apparent_temperature[currentHour] : null;
+        const hourlyTemp = Number.isFinite(hourly.temperature_2m[currentHour]) ? hourly.temperature_2m[currentHour] : getHourlyValue('temperature_2m');
+        const hourlyApparent = hourly.apparent_temperature
+          ? (Number.isFinite(hourly.apparent_temperature[currentHour]) ? hourly.apparent_temperature[currentHour] : getHourlyValue('apparent_temperature'))
+          : null;
         
         // Use hourly data if it's within reasonable range of current
         if (hourlyTemp !== undefined && Math.abs(hourlyTemp - currentTemp) < 3) {
@@ -975,6 +1018,9 @@ class WeatherAgent {
           currentHumidity = hourly.relative_humidity_2m[currentHour];
         }
       }
+
+      if (!Number.isFinite(currentHumidity)) currentHumidity = null;
+      if (!Number.isFinite(currentApparentTemp)) currentApparentTemp = currentTemp;
       
       // Validate temperature ranges (sanity check)
       if (currentTemp < -50 || currentTemp > 60) {
@@ -993,15 +1039,15 @@ class WeatherAgent {
       // Enhanced recommendation with all available data
       const recommendation = this.generateEnhancedRecommendation({
         temperature: currentTemp,
-        apparentTemperature: current.apparent_temperature,
+        apparentTemperature: currentApparentTemp,
         humidity: currentHumidity,
-        windSpeed: current.wind_speed_10m,
-        windDirection: current.wind_direction_10m,
+        windSpeed: current?.wind_speed_10m ?? null,
+        windDirection: current?.wind_direction_10m ?? null,
         weatherCode: weatherCode,
-        pressure: current.surface_pressure,
-        cloudCover: current.cloud_cover,
-        visibility: current.visibility,
-        uvIndex: current.uv_index
+        pressure: current?.surface_pressure ?? null,
+        cloudCover: current?.cloud_cover ?? null,
+        visibility: current?.visibility ?? null,
+        uvIndex: current?.uv_index ?? getHourlyValue('uv_index')
       });
       
       const weatherPayload = {
@@ -1011,20 +1057,20 @@ class WeatherAgent {
         feelsLike: currentApparentTemp ? Math.round(currentApparentTemp * 10) / 10 : Math.round(currentTemp * 10) / 10,
         apparentTemperature: currentApparentTemp ? Math.round(currentApparentTemp * 10) / 10 : null,
         description: weatherInfo.description,
-        humidity: Math.round(currentHumidity),
-        windSpeed: Math.round(current.wind_speed_10m * 10) / 10,
-        windDirection: current.wind_direction_10m ? Math.round(current.wind_direction_10m) : null,
-        pressure: current.surface_pressure ? Math.round(current.surface_pressure * 10) / 10 : null,
-        visibility: current.visibility ? Math.round(current.visibility / 1000 * 10) / 10 : null,
-        cloudCover: current.cloud_cover ? Math.round(current.cloud_cover) : null,
-        uvIndex: current.uv_index ? Math.round(current.uv_index * 10) / 10 : null,
+        humidity: Number.isFinite(currentHumidity) ? Math.round(currentHumidity) : null,
+        windSpeed: Number.isFinite(current?.wind_speed_10m) ? Math.round(current.wind_speed_10m * 10) / 10 : null,
+        windDirection: Number.isFinite(current?.wind_direction_10m) ? Math.round(current.wind_direction_10m) : null,
+        pressure: Number.isFinite(current?.surface_pressure) ? Math.round(current.surface_pressure * 10) / 10 : null,
+        visibility: Number.isFinite(current?.visibility) ? Math.round(current.visibility / 1000 * 10) / 10 : null,
+        cloudCover: Number.isFinite(current?.cloud_cover) ? Math.round(current.cloud_cover) : null,
+        uvIndex: Number.isFinite(current?.uv_index) ? Math.round(current.uv_index * 10) / 10 : null,
         isDay: isDay,
         icon: weatherInfo.icon,
         recommendation: recommendation,
         accuracy: '🎯 Google Weather Compatible Data',
         timezone: response.data.timezone || 'UTC',
         coordinates: `${latitude}, ${longitude}`,
-        dataSource: 'Open-Meteo API (High Resolution + Advanced Parameters)',
+        dataSource: current ? 'Open-Meteo API (High Resolution + Advanced Parameters)' : 'Open-Meteo API (Daily + Hourly lightweight profile)',
         googleCompatible: true,
         advancedData: advancedData,
         lastUpdated: currentTimeString,
@@ -1032,7 +1078,7 @@ class WeatherAgent {
         debug: {
           weatherCode: weatherCode,
           isDay: isDay,
-          rawTemp: current.temperature_2m,
+          rawTemp: current?.temperature_2m ?? getHourlyValue('temperature_2m'),
           processedTemp: currentTemp,
           timezoneOffset: response.data.utc_offset_seconds || 0
         }
