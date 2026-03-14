@@ -10,7 +10,7 @@ app.use(cors());
 app.use(express.json());
 
 // Serve static files with proper MIME types
-app.use(express.static('public', {
+app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders: (res, path) => {
     if (path.endsWith('.css')) {
       res.setHeader('Content-Type', 'text/css');
