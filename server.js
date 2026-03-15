@@ -1654,9 +1654,11 @@ app.get('/api/forecast/:city', async (req, res) => {
   res.json(forecast);
 });
 
-app.listen(PORT, () => {
-  console.log(`Weather Agent server running on port ${PORT}`);
-  console.log(`Visit http://localhost:${PORT} to use the weather agent`);
-});
+if (!process.env.VERCEL && process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`Weather Agent server running on port ${PORT}`);
+    console.log(`Visit http://localhost:${PORT} to use the weather agent`);
+  });
+}
 
 module.exports = app;
